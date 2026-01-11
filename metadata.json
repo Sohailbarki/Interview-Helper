@@ -1,0 +1,7 @@
+{
+  "name": "LiveInterviewCoach",
+  "description": "A cross-platform interview assistant with live teleprompter, ASR transcription, and context-matched STAR/CAR answer suggestions.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
