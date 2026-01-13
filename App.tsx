@@ -35,26 +35,24 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden">
+    <div className="flex h-screen bg-white text-slate-900 overflow-hidden">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
       
-      <main className="flex-1 ml-64 overflow-y-auto">
-        <div className="min-h-full pb-20">
+      <main className="flex-1 ml-64 bg-slate-50/50 overflow-y-auto">
+        <div className="min-h-full">
           {renderContent()}
         </div>
       </main>
 
-      {/* Global Hotkey Listener (Simulation) */}
+      {/* Global Hotkey Listener */}
       <HotkeyManager setActiveTab={setActiveTab} />
     </div>
   );
 };
 
-// Helper component for hotkeys
 const HotkeyManager: React.FC<{ setActiveTab: (t: string) => void }> = ({ setActiveTab }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Simulation of global hotkeys within the app
       if (e.ctrlKey && e.altKey) {
         if (e.key === 'd') setActiveTab('dashboard');
         if (e.key === 'p') setActiveTab('pkb');

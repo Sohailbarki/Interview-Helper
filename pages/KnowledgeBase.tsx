@@ -3,29 +3,26 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Search, 
-  Tag, 
   Edit3, 
   Trash2, 
   FileText,
-  Upload,
-  CheckCircle,
   Loader2,
   XCircle,
   Save,
   FileCode,
   FileUp,
   AlertCircle,
-  File
+  CheckCircle2,
+  RefreshCw
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
 import { Scenario, FormatType, Document } from '../types';
 import mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.10.38/build/pdf.worker.mjs`;
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 const KnowledgeBase: React.FC = () => {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -35,6 +32,7 @@ const KnowledgeBase: React.FC = () => {
   const [isDocModalOpen, setIsDocModalOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +51,11 @@ const KnowledgeBase: React.FC = () => {
     setDocs(databaseService.getDocuments());
   }, []);
 
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   const handleSaveScenario = () => {
     if (!editingScenario.title) return;
     const newScenario: Scenario = {
@@ -68,6 +71,7 @@ const KnowledgeBase: React.FC = () => {
     databaseService.saveScenario(newScenario);
     setScenarios(databaseService.getScenarios());
     setIsModalOpen(false);
+    showToast("Scenario synced to vault");
   };
 
   const handleSaveDoc = () => {
@@ -83,85 +87,40 @@ const KnowledgeBase: React.FC = () => {
     setDocs(databaseService.getDocuments());
     setIsDocModalOpen(false);
     setEditingDoc({ type: 'CV', content: '' });
-    setFileError(null);
+    showToast("Document successfully synced");
   };
 
   const handleDeleteScenario = (id: string) => {
-    if (confirm('Delete this scenario?')) {
+    if (confirm('Permanently remove this scenario from the vault?')) {
       databaseService.deleteScenario(id);
       setScenarios(databaseService.getScenarios());
+      showToast("Scenario purged");
     }
-  };
-
-  const handleDeleteDoc = (id: string) => {
-    if (confirm('Remove this document from AI context?')) {
-      databaseService.deleteDocument(id);
-      setDocs(databaseService.getDocuments());
-    }
-  };
-
-  const extractTextFromPDF = async (arrayBuffer: ArrayBuffer): Promise<string> => {
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += pageText + "\n";
-    }
-    return fullText;
-  };
-
-  const extractTextFromDocx = async (arrayBuffer: ArrayBuffer): Promise<string> => {
-    const result = await mammoth.extractRawText({ arrayBuffer });
-    return result.value;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setFileError(null);
-
-    if (file.size > MAX_FILE_SIZE) {
-      setFileError("File is too large. Limit is 5MB.");
-      return;
-    }
-
+    if (file.size > MAX_FILE_SIZE) { setFileError("File limit exceeded (5MB)."); return; }
     setIsProcessingFile(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
       let text = "";
-
-      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        text = await extractTextFromPDF(arrayBuffer);
-      } else if (
-        file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || 
-        file.name.endsWith(".docx")
-      ) {
-        text = await extractTextFromDocx(arrayBuffer);
-      } else {
-        throw new Error("Unsupported file format. Please upload PDF or DOCX.");
-      }
-
-      if (!text.trim()) {
-        throw new Error("Could not extract any text from this file.");
-      }
-
-      // Auto-populate the form with extracted text
-      setEditingDoc({
-        ...editingDoc,
-        title: file.name,
-        content: text
-      });
-
-    } catch (err: any) {
-      console.error("File processing failed:", err);
-      setFileError(err.message || "Failed to process file.");
-    } finally {
-      setIsProcessingFile(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+      if (file.name.endsWith(".pdf")) {
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          text += textContent.items.map((item: any) => item.str).join(" ") + "\n";
+        }
+      } else if (file.name.endsWith(".docx")) {
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        text = result.value;
+      } else throw new Error("Format unsupported.");
+      setEditingDoc({ ...editingDoc, title: file.name, content: text });
+    } catch (err: any) { setFileError(err.message); }
+    finally { setIsProcessingFile(false); }
   };
 
   const filteredScenarios = scenarios.filter(s => 
@@ -170,86 +129,80 @@ const KnowledgeBase: React.FC = () => {
   );
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-8">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Knowledge Base</h1>
-          <p className="text-slate-400 mt-1">Populate your AI context with STAR scenarios and your CV.</p>
+    <div className="p-12 max-w-7xl mx-auto space-y-12 bg-white min-h-screen relative">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-[300] flex items-center space-x-3 px-6 py-3 rounded-2xl shadow-2xl animate-in slide-in-from-top-4 duration-300 ${
+          toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          <CheckCircle2 size={18} />
+          <span className="text-xs font-black uppercase tracking-widest">{toast.message}</span>
         </div>
-        <div className="flex space-x-3">
-          <button 
-            onClick={() => setIsDocModalOpen(true)}
-            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl font-medium border border-slate-700 transition-all"
-          >
-            <FileCode size={18} />
-            <span>Manage CV/Docs</span>
+      )}
+
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+        <div>
+          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-2">Knowledge Infrastructure</p>
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight">The Neural Vault.</h1>
+          <p className="text-slate-500 mt-2 font-medium">Equip your AI assistant with the context of your career history.</p>
+        </div>
+        <div className="flex space-x-4">
+          <button onClick={() => setIsDocModalOpen(true)} className="flex items-center space-x-3 bg-white hover:bg-slate-50 text-slate-900 px-8 py-4 rounded-[2rem] font-black text-xs uppercase tracking-widest border border-slate-200 transition-all shadow-sm">
+            <FileCode size={18} className="text-blue-600" />
+            <span>Sync Assets</span>
           </button>
-          <button 
-            onClick={() => { setEditingScenario({ format: FormatType.STAR, tags: [] }); setIsModalOpen(true); }}
-            className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl font-medium shadow-lg shadow-blue-900/20 transition-all"
-          >
+          <button onClick={() => { setEditingScenario({ format: FormatType.STAR, tags: [] }); setIsModalOpen(true); }} className="flex items-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-100 transition-all active:scale-95">
             <Plus size={18} />
-            <span>New Scenario</span>
+            <span>New Narrative</span>
           </button>
         </div>
       </div>
 
-      {/* Docs Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {docs.length > 0 ? (
-          docs.map(doc => (
-            <div key={doc.id} className="bg-blue-600/10 border border-blue-500/20 p-5 rounded-2xl flex items-center justify-between group transition-all hover:bg-blue-600/15">
-              <div className="flex items-center space-x-4">
-                <div className="bg-blue-600/20 p-2.5 rounded-lg">
-                  <FileText size={20} className="text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-blue-100">{doc.title}</p>
-                  <p className="text-[10px] text-blue-300/60 uppercase tracking-widest font-black">{doc.type} • {new Date(doc.createdAt).toLocaleDateString()}</p>
-                </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {docs.map(doc => (
+          <div key={doc.id} className="bg-white border border-slate-100 p-6 rounded-[2.5rem] flex items-center justify-between group shadow-sm hover:border-blue-200 transition-all">
+            <div className="flex items-center space-x-4">
+              <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shrink-0">
+                <FileText size={20} />
               </div>
-              <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => handleDeleteDoc(doc.id)} className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors">
-                  <Trash2 size={16} />
-                </button>
+              <div className="truncate">
+                <p className="text-xs font-black text-slate-900 truncate uppercase tracking-tighter">{doc.title}</p>
+                <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{doc.type}</p>
               </div>
             </div>
-          ))
-        ) : (
-          <div className="md:col-span-2 bg-slate-900/40 border-2 border-dashed border-slate-800 p-8 rounded-3xl text-center">
-            <FileUp size={40} className="mx-auto text-slate-700 mb-3" />
-            <p className="text-slate-500 font-medium">No documents uploaded. Your AI will lack personal context.</p>
-            <button onClick={() => setIsDocModalOpen(true)} className="text-blue-500 text-sm font-bold mt-2 hover:underline">Upload CV / Resume</button>
+            <button onClick={() => { databaseService.deleteDocument(doc.id); setDocs(databaseService.getDocuments()); showToast("Asset removed"); }} className="p-2 text-slate-300 hover:text-red-500 transition-colors">
+              <Trash2 size={16} />
+            </button>
           </div>
-        )}
+        ))}
       </div>
 
-      <div className="relative group">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={20} />
+      <div className="relative">
+        <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300" size={24} />
         <input 
           type="text" 
-          placeholder="Search scenarios by role, skill, or project..."
+          placeholder="Filter scenarios by competencies, role, or project keywords..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full bg-slate-900/50 border border-slate-800 focus:border-blue-500/50 rounded-2xl py-4 pl-12 pr-4 outline-none transition-all"
+          className="w-full bg-slate-50 border border-slate-100 focus:bg-white focus:border-blue-400 focus:ring-4 focus:ring-blue-50 rounded-[2.5rem] py-6 pl-16 pr-8 outline-none transition-all font-bold text-slate-900 placeholder:text-slate-300 shadow-inner"
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
         {filteredScenarios.map((s) => (
-          <div key={s.id} className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 hover:border-slate-700 transition-all group relative flex flex-col">
-            <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1">
-                <button onClick={() => { setEditingScenario(s); setIsModalOpen(true); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"><Edit3 size={14} /></button>
-                <button onClick={() => handleDeleteScenario(s.id)} className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg"><Trash2 size={14} /></button>
+          <div key={s.id} className="bg-white border border-slate-100 rounded-[3rem] p-10 hover:shadow-2xl hover:shadow-slate-100 hover:border-blue-100 transition-all group flex flex-col relative">
+            <div className="absolute top-10 right-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-2">
+                <button onClick={() => { setEditingScenario(s); setIsModalOpen(true); }} className="p-3 bg-slate-50 hover:bg-blue-600 hover:text-white rounded-2xl text-slate-400 transition-all"><Edit3 size={16} /></button>
+                <button onClick={() => handleDeleteScenario(s.id)} className="p-3 bg-slate-50 hover:bg-red-500 hover:text-white rounded-2xl text-slate-400 transition-all"><Trash2 size={16} /></button>
             </div>
-            <div className="mb-4">
-              <span className="text-[10px] font-bold uppercase text-blue-500 bg-blue-500/10 px-2 py-1 rounded">{s.format}</span>
-              <h3 className="font-bold text-lg mt-3 text-slate-100">{s.title}</h3>
+            <div className="mb-6">
+              <span className="text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-3 py-1.5 rounded-xl tracking-widest shadow-sm">{s.format}</span>
+              <h3 className="font-black text-xl mt-4 text-slate-900 tracking-tight leading-tight">{s.title}</h3>
             </div>
-            <p className="text-slate-400 text-sm line-clamp-3 leading-relaxed flex-1 italic">"{s.action || 'Focus: ' + s.title}"</p>
-            <div className="flex flex-wrap gap-2 mt-4">
+            <p className="text-slate-500 text-sm font-medium leading-relaxed flex-1 italic line-clamp-4">"{s.action || 'Focus area defined.'}"</p>
+            <div className="flex flex-wrap gap-2 mt-8">
               {s.tags.map(tag => (
-                <span key={tag} className="text-[9px] font-bold bg-slate-800 text-slate-500 px-2 py-0.5 rounded uppercase tracking-tighter">#{tag}</span>
+                <span key={tag} className="text-[9px] font-black bg-slate-50 text-slate-400 px-2.5 py-1 rounded-lg uppercase tracking-wider">#{tag}</span>
               ))}
             </div>
           </div>
@@ -258,134 +211,105 @@ const KnowledgeBase: React.FC = () => {
 
       {/* Scenario Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-[2rem] w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
-            <div className="p-8 border-b border-slate-800 flex justify-between items-center">
-              <h2 className="text-2xl font-bold">Edit STAR Scenario</h2>
-              <button onClick={() => setIsModalOpen(false)}><XCircle size={28} className="text-slate-500" /></button>
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xl z-[200] flex items-center justify-center p-6">
+          <div className="bg-white rounded-[3.5rem] w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-[0_50px_100px_-20px_rgba(0,0,0,0.3)] border border-white">
+            <div className="p-12 border-b border-slate-50 flex justify-between items-center">
+              <div>
+                <h2 className="text-3xl font-black text-slate-900 tracking-tighter">Draft Narrative.</h2>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">STAR / CAR Framework Structure</p>
+              </div>
+              <button onClick={() => setIsModalOpen(false)} className="p-4 bg-slate-50 text-slate-400 rounded-3xl hover:bg-red-50 hover:text-red-500 transition-all"><XCircle size={32} strokeWidth={1.5} /></button>
             </div>
-            <div className="p-8 space-y-6">
-              <input 
-                type="text" placeholder="Scenario Title (e.g. Migration Project)"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 outline-none focus:border-blue-500"
-                value={editingScenario.title}
-                onChange={e => setEditingScenario({...editingScenario, title: e.target.value})}
-              />
-              <textarea 
-                placeholder="The specific Action you took..." rows={5}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 outline-none"
-                value={editingScenario.action}
-                onChange={e => setEditingScenario({...editingScenario, action: e.target.value})}
-              />
-              <input 
-                type="text" placeholder="Tags (comma separated)"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 outline-none"
-                value={editingScenario.tags?.join(', ')}
-                onChange={e => setEditingScenario({...editingScenario, tags: e.target.value.split(',').map(t => t.trim())})}
-              />
-              <button onClick={handleSaveScenario} className="w-full bg-blue-600 py-3 rounded-xl font-bold">Save Scenario</button>
+            <div className="p-12 space-y-8">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-2">Headline</label>
+                <input 
+                  type="text" placeholder="e.g. Scaling User Acquisition"
+                  className="w-full bg-slate-50 border border-slate-100 rounded-3xl p-6 outline-none focus:bg-white focus:border-blue-400 font-bold text-slate-900 transition-all"
+                  value={editingScenario.title}
+                  onChange={e => setEditingScenario({...editingScenario, title: e.target.value})}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-2">Core Action & Evidence</label>
+                <textarea 
+                  placeholder="Describe your primary technical or leadership actions..." rows={6}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-[2rem] p-8 outline-none focus:bg-white focus:border-blue-400 font-medium text-slate-800 transition-all"
+                  value={editingScenario.action}
+                  onChange={e => setEditingScenario({...editingScenario, action: e.target.value})}
+                />
+              </div>
+              <button onClick={handleSaveScenario} className="w-full bg-slate-900 text-white py-6 rounded-3xl font-black uppercase tracking-[0.3em] text-xs shadow-2xl shadow-slate-200 transition-all hover:bg-black active:scale-95">Sync to Vault</button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Doc Modal */}
+      
+      {/* Doc Modal with Preview */}
       {isDocModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-[2rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xl z-[200] flex items-center justify-center p-6">
+          <div className="bg-white rounded-[3.5rem] w-full max-w-2xl shadow-[0_50px_100px_-20px_rgba(0,0,0,0.3)] overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-12 border-b border-slate-50 flex justify-between items-center">
               <div>
-                <h2 className="text-2xl font-bold">Professional Context</h2>
-                <p className="text-sm text-slate-500">Add documents to ground your AI Copilot.</p>
+                <h2 className="text-3xl font-black text-slate-900 tracking-tighter">Sync Assets.</h2>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Grounding documents for AI context</p>
               </div>
-              <button onClick={() => { setIsDocModalOpen(false); setFileError(null); }}><XCircle size={28} className="text-slate-500" /></button>
+              <button onClick={() => setIsDocModalOpen(false)} className="p-4 bg-slate-50 text-slate-400 rounded-3xl hover:bg-red-50 hover:text-red-500 transition-all"><XCircle size={32} strokeWidth={1.5} /></button>
             </div>
             
-            <div className="p-8 overflow-y-auto space-y-6">
-              {/* File Upload Area */}
-              <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-800 rounded-[2rem] p-10 bg-slate-950/30 transition-all hover:border-blue-500/50 group">
-                <input 
-                  type="file" 
-                  ref={fileInputRef}
-                  onChange={handleFileUpload}
-                  accept=".pdf,.docx"
-                  className="hidden"
-                />
-                
-                {isProcessingFile ? (
-                  <div className="flex flex-col items-center space-y-4">
-                    <Loader2 size={48} className="text-blue-500 animate-spin" />
-                    <p className="text-blue-400 font-black uppercase tracking-widest text-xs">Parsing Document Layers...</p>
+            <div className="p-12 space-y-8 overflow-y-auto">
+              {!editingDoc.content ? (
+                <div className="flex flex-col items-center justify-center border-4 border-dashed border-slate-100 rounded-[3rem] p-16 bg-slate-50/30 hover:border-blue-100 transition-all group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                  <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf,.docx" className="hidden" />
+                  {isProcessingFile ? (
+                    <div className="flex flex-col items-center space-y-4">
+                      <RefreshCw size={48} className="text-blue-600 animate-spin" />
+                      <p className="font-black text-slate-900 uppercase tracking-widest text-xs">Extracting Intelligence...</p>
+                    </div>
+                  ) : (
+                    <div className="text-center space-y-4">
+                      <FileUp size={48} className="text-blue-600 mx-auto group-hover:scale-110 transition-transform" />
+                      <p className="font-black text-slate-900 uppercase tracking-widest text-xs">Drop Experience</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">PDF / DOCX Limit 5MB</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in fade-in duration-500">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center">
+                        <FileText size={16} />
+                      </div>
+                      <span className="font-black text-slate-900 uppercase tracking-tighter text-sm">{editingDoc.title}</span>
+                    </div>
+                    <button onClick={() => setEditingDoc({type:'CV', content:''})} className="text-[10px] font-black text-red-500 uppercase tracking-widest hover:underline">Clear</button>
                   </div>
-                ) : (
-                  <div className="flex flex-col items-center text-center space-y-4">
-                    <div className="bg-blue-600/10 p-5 rounded-full text-blue-500 group-hover:scale-110 transition-transform">
-                      <FileUp size={32} />
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-200">Upload PDF or Word</p>
-                      <p className="text-xs text-slate-500 mt-1">Up to 5MB. AI will extract core experience context.</p>
-                    </div>
-                    <button 
-                      onClick={() => fileInputRef.current?.click()}
-                      className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-bold text-sm transition-all shadow-lg shadow-blue-900/20"
+                  
+                  <div className="bg-slate-50 rounded-[2rem] p-8 border border-slate-100 max-h-[300px] overflow-y-auto custom-scrollbar-thin">
+                    <p className="text-xs font-medium text-slate-600 leading-relaxed whitespace-pre-wrap">
+                      {editingDoc.content}
+                    </p>
+                  </div>
+
+                  <div className="flex space-x-4">
+                    <select 
+                      className="bg-slate-50 border border-slate-100 rounded-2xl px-6 font-black text-[10px] uppercase tracking-widest text-slate-900 outline-none"
+                      value={editingDoc.type}
+                      onChange={e => setEditingDoc({...editingDoc, type: e.target.value as any})}
                     >
-                      Browse Files
+                      <option value="CV">Curriculum Vitae</option>
+                      <option value="JD">Job Description</option>
+                      <option value="Notes">Context Notes</option>
+                    </select>
+                    <button onClick={handleSaveDoc} className="flex-1 bg-blue-600 text-white py-6 rounded-3xl font-black uppercase tracking-[0.3em] text-xs shadow-xl shadow-blue-100 transition-all active:scale-95 flex items-center justify-center space-x-3">
+                      <Save size={16} />
+                      <span>Sync to Vault</span>
                     </button>
                   </div>
-                )}
-              </div>
-
-              {fileError && (
-                <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-center space-x-3 text-red-400 text-xs font-bold">
-                  <AlertCircle size={18} />
-                  <span>{fileError}</span>
                 </div>
               )}
-
-              <div className="relative flex items-center py-4">
-                <div className="flex-grow border-t border-slate-800"></div>
-                <span className="flex-shrink mx-4 text-slate-600 text-[10px] font-black uppercase tracking-widest">Or Paste Manually</span>
-                <div className="flex-grow border-t border-slate-800"></div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">Document Title</label>
-                  <select 
-                    value={editingDoc.type}
-                    onChange={e => setEditingDoc({...editingDoc, type: e.target.value as any})}
-                    className="bg-slate-800 text-xs font-bold p-1.5 rounded-lg border border-slate-700 outline-none"
-                  >
-                    <option value="CV">RESUME / CV</option>
-                    <option value="JD">JOB DESCRIPTION</option>
-                    <option value="Notes">RAW NOTES</option>
-                  </select>
-                </div>
-                <input 
-                  type="text" 
-                  placeholder="e.g. Senior Engineer CV 2024"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-sm outline-none focus:border-blue-500"
-                  value={editingDoc.title || ''}
-                  onChange={e => setEditingDoc({...editingDoc, title: e.target.value})}
-                />
-                <textarea 
-                  placeholder="Raw text for context..."
-                  rows={6}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 outline-none font-mono text-sm"
-                  value={editingDoc.content}
-                  onChange={e => setEditingDoc({...editingDoc, content: e.target.value})}
-                />
-              </div>
-
-              <button 
-                onClick={handleSaveDoc} 
-                disabled={!editingDoc.content}
-                className="w-full bg-slate-100 hover:bg-white text-slate-900 py-4 rounded-xl font-black uppercase tracking-[0.2em] text-xs flex items-center justify-center space-x-2 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-              >
-                <Save size={18} />
-                <span>Sync with Knowledge Base</span>
-              </button>
+              {fileError && <p className="text-red-500 text-center text-xs font-black uppercase">{fileError}</p>}
             </div>
           </div>
         </div>

@@ -1,7 +1,8 @@
 
 export enum FormatType {
   STAR = 'STAR',
-  CAR = 'CAR'
+  CAR = 'CAR',
+  LOGICAL = 'LOGICAL'
 }
 
 export interface Scenario {
@@ -47,4 +48,9 @@ export interface AppSettings {
   teleprompterSpeed: number;
   fontSize: number;
   opacity: number;
+  openaiApiKey?: string;
+  fontFamily: 'Inter' | 'JetBrains Mono';
+  synthesisWidth: number;
+  footerHeight: number;
+  overlayWidth: number;
 }

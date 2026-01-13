@@ -13,7 +13,7 @@ export const geminiService = {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
+        model: 'gemini-2.0-pro-exp-02-05',
         contents: `Question: ${question}\n\nAvailable Scenarios: ${JSON.stringify(scenarios)}\n\nUser Profile Context: ${userContext}\n\nTone: ${tone}`,
         config: {
           systemInstruction: COPILOT_SYSTEM_PROMPT,
@@ -44,7 +44,7 @@ export const geminiService = {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.0-flash-exp',
         contents: `Transcript: ${transcript}\n\nCandidate Scenarios: ${JSON.stringify(scenarios.map(s => ({ id: s.id, title: s.title, tags: s.tags })))}`,
         config: {
           systemInstruction: MATCHER_SYSTEM_PROMPT,
