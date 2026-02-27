@@ -11,8 +11,12 @@ import {
   AlertTriangle,
   Zap,
   Info,
+  Mic,
   Maximize2,
-  Columns
+  Columns,
+  Award,
+  Terminal,
+  Users
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { databaseService } from '../services/databaseService';
@@ -29,12 +33,12 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
   const updateSetting = (key: keyof AppSettings, value: any) => {
     let nextSettings = { ...settings, [key]: value };
     
-    // Auto-update model when provider changes to prevent cross-provider model errors
+    // Auto-update model when provider changes
     if (key === 'aiProvider') {
       if (value === 'openai') {
         nextSettings.aiModel = 'gpt-4o';
       } else {
-        nextSettings.aiModel = 'gemini-2.0-flash-exp';
+        nextSettings.aiModel = 'gemini-3-flash-preview';
       }
     }
     
@@ -90,7 +94,6 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
                   >
                     <option value="gpt-4o">GPT-4o (High Performance)</option>
                     <option value="gpt-4o-mini">GPT-4o Mini (Ultra Fast)</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Legacy)</option>
                   </select>
                 </div>
               )}
@@ -103,9 +106,8 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
                     value={settings.aiModel}
                     onChange={e => updateSetting('aiModel', e.target.value)}
                   >
-                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Fastest)</option>
-                    <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro (Thinking)</option>
-                    <option value="gemini-flash-latest">Gemini 1.5 Flash (Stable)</option>
+                    <option value="gemini-3-flash-preview">Gemini 3 Flash (Recommended)</option>
+                    <option value="gemini-3-pro-preview">Gemini 3 Pro (Deep Reasoning)</option>
                   </select>
                 </div>
               )}
@@ -136,6 +138,44 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
           </div>
         </div>
 
+        {/* ASR CONFIGURATION */}
+        <div className="bg-white border border-slate-100 rounded-[3rem] overflow-hidden shadow-sm">
+          <div className="px-10 py-8 bg-slate-50 border-b border-slate-100 flex items-center space-x-4">
+            <Mic size={24} className="text-blue-600" />
+            <h3 className="font-black uppercase tracking-widest text-[11px] text-slate-900">Speech Recognition</h3>
+          </div>
+          <div className="p-10 space-y-12">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+              <div className="space-y-4">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Recognition Mode</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-[1.5rem] p-5 text-sm font-bold text-slate-900 focus:border-blue-400 outline-none"
+                  value={settings.asrMode}
+                  onChange={e => updateSetting('asrMode', e.target.value)}
+                >
+                  <option value="browser">Web Speech API (Standard)</option>
+                  <option value="local">Local Whisper (Experimental)</option>
+                </select>
+              </div>
+              <div className="space-y-8 flex flex-col justify-center">
+                 <div className="flex justify-between items-center mb-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ASR Confidence Threshold</span>
+                    <span className="text-xl font-black text-blue-600 font-mono">{(settings.asrConfidenceThreshold * 100).toFixed(0)}%</span>
+                 </div>
+                 <input 
+                  type="range" min="0" max="1" step="0.05"
+                  value={settings.asrConfidenceThreshold}
+                  onChange={e => updateSetting('asrConfidenceThreshold', parseFloat(e.target.value))}
+                  className="w-full h-2 bg-slate-100 rounded-full appearance-none cursor-pointer accent-blue-600"
+                 />
+                 <p className="text-[10px] text-slate-400 font-medium italic px-2">
+                   Higher values filter out background noise but may miss quiet speech. Recommended: 0.5 - 0.7.
+                 </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* INTERFACE OPTIMIZATION */}
         <div className="bg-white border border-slate-100 rounded-[3rem] overflow-hidden shadow-sm">
           <div className="px-10 py-8 bg-slate-50 border-b border-slate-100 flex items-center space-x-4">
@@ -145,7 +185,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
           <div className="p-10 space-y-12">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
               <div className="space-y-6">
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Engine Font</label>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Engine Font</label>
                 <div className="flex space-x-4">
                   {(['Inter', 'JetBrains Mono'] as const).map((font) => (
                     <button
@@ -204,18 +244,6 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
                   type="range" min="80" max="300" 
                   value={settings.footerHeight}
                   onChange={e => updateSetting('footerHeight', parseInt(e.target.value))}
-                  className="w-full h-2 bg-slate-100 rounded-full appearance-none cursor-pointer accent-blue-600"
-                 />
-              </div>
-              <div className="space-y-8">
-                 <div className="flex justify-between items-center mb-2">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Overlay Window Width</span>
-                    <span className="text-xl font-black text-blue-600 font-mono">{settings.overlayWidth}px</span>
-                 </div>
-                 <input 
-                  type="range" min="300" max="1200" 
-                  value={settings.overlayWidth}
-                  onChange={e => updateSetting('overlayWidth', parseInt(e.target.value))}
                   className="w-full h-2 bg-slate-100 rounded-full appearance-none cursor-pointer accent-blue-600"
                  />
               </div>

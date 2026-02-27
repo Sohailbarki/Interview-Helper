@@ -11,9 +11,11 @@ export const geminiService = {
     tone: string = 'confident'
   ): Promise<SuggestedAnswer | null> {
     try {
+      // Initialize GoogleGenAI with named parameter apiKey from process.env.API_KEY
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      // Using gemini-3-pro-preview for complex reasoning task as per guidelines
       const response = await ai.models.generateContent({
-        model: 'gemini-2.0-pro-exp-02-05',
+        model: 'gemini-3-pro-preview',
         contents: `Question: ${question}\n\nAvailable Scenarios: ${JSON.stringify(scenarios)}\n\nUser Profile Context: ${userContext}\n\nTone: ${tone}`,
         config: {
           systemInstruction: COPILOT_SYSTEM_PROMPT,
@@ -31,6 +33,7 @@ export const geminiService = {
         },
       });
 
+      // Access .text property directly as per SDK guidelines
       const text = response.text;
       if (!text) return null;
       return JSON.parse(text.trim());
@@ -42,9 +45,11 @@ export const geminiService = {
 
   async matchTranscript(transcript: string, scenarios: Scenario[]): Promise<any> {
     try {
+      // Initialize GoogleGenAI with named parameter apiKey from process.env.API_KEY
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      // Using gemini-3-flash-preview for general matching task
       const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-3-flash-preview',
         contents: `Transcript: ${transcript}\n\nCandidate Scenarios: ${JSON.stringify(scenarios.map(s => ({ id: s.id, title: s.title, tags: s.tags })))}`,
         config: {
           systemInstruction: MATCHER_SYSTEM_PROMPT,
@@ -60,6 +65,7 @@ export const geminiService = {
           }
         }
       });
+      // Access .text property directly
       const text = response.text;
       if (!text) return null;
       return JSON.parse(text.trim());

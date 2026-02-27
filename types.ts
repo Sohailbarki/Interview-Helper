@@ -38,6 +38,7 @@ export interface SuggestedAnswer {
   answer: string;
   bullets: string[];
   followup: string;
+  sources?: { title: string, uri: string }[];
 }
 
 export interface AppSettings {
@@ -53,4 +54,14 @@ export interface AppSettings {
   synthesisWidth: number;
   footerHeight: number;
   overlayWidth: number;
+  asrConfidenceThreshold: number;
+}
+
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
 }

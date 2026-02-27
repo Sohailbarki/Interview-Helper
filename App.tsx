@@ -12,7 +12,16 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('coach_settings');
-    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Merge with DEFAULT_SETTINGS to ensure all keys exist
+        return { ...DEFAULT_SETTINGS, ...parsed };
+      } catch (e) {
+        return DEFAULT_SETTINGS;
+      }
+    }
+    return DEFAULT_SETTINGS;
   });
 
   useEffect(() => {

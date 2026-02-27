@@ -31,17 +31,25 @@ const KnowledgeBase: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDocModalOpen, setIsDocModalOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStatus, setProcessingStatus] = useState('');
   const [fileError, setFileError] = useState<string | null>(null);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [editingScenario, setEditingScenario] = useState<Partial<Scenario>>({
+    title: '',
     format: FormatType.STAR,
+    situation: '',
+    task: '',
+    action: '',
+    result: '',
     tags: []
   });
 
   const [editingDoc, setEditingDoc] = useState<Partial<Document>>({
+    title: '',
     type: 'CV',
     content: ''
   });
@@ -86,7 +94,7 @@ const KnowledgeBase: React.FC = () => {
     databaseService.saveDocument(newDoc);
     setDocs(databaseService.getDocuments());
     setIsDocModalOpen(false);
-    setEditingDoc({ type: 'CV', content: '' });
+    setEditingDoc({ title: '', type: 'CV', content: '' });
     showToast("Document successfully synced");
   };
 
@@ -102,25 +110,75 @@ const KnowledgeBase: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileError(null);
-    if (file.size > MAX_FILE_SIZE) { setFileError("File limit exceeded (5MB)."); return; }
+    setProcessingProgress(0);
+    setProcessingStatus('Initializing...');
+    
+    if (file.size > MAX_FILE_SIZE) { 
+      setFileError("File limit exceeded (5MB)."); 
+      return; 
+    }
+    
     setIsProcessingFile(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
       let text = "";
+      
       if (file.name.endsWith(".pdf")) {
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          text += textContent.items.map((item: any) => item.str).join(" ") + "\n";
+        setProcessingStatus('Loading PDF structure...');
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        
+        loadingTask.onProgress = (progressData: { loaded: number, total: number }) => {
+          const percent = Math.round((progressData.loaded / progressData.total) * 100);
+          setProcessingProgress(percent);
+        };
+
+        const pdf = await loadingTask.promise;
+        const numPages = pdf.numPages;
+        
+        for (let i = 1; i <= numPages; i++) {
+          setProcessingStatus(`Extracting page ${i} of ${numPages}...`);
+          setProcessingProgress(Math.round((i / numPages) * 100));
+          
+          try {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            text += textContent.items.map((item: any) => item.str).join(" ") + "\n";
+          } catch (pageErr) {
+            console.error(`Error on page ${i}:`, pageErr);
+            text += `\n[Error extracting page ${i}]\n`;
+          }
         }
       } else if (file.name.endsWith(".docx")) {
+        setProcessingStatus('Parsing DOCX structure...');
+        setProcessingProgress(30);
+        
         const result = await mammoth.extractRawText({ arrayBuffer });
+        
+        if (result.messages.length > 0) {
+          console.warn("Mammoth messages:", result.messages);
+        }
+        
         text = result.value;
-      } else throw new Error("Format unsupported.");
+        setProcessingProgress(100);
+        setProcessingStatus('Extraction complete.');
+      } else {
+        throw new Error("Format unsupported. Please use PDF or DOCX.");
+      }
+      
+      if (!text.trim()) {
+        throw new Error("No readable text content found in the document.");
+      }
+      
       setEditingDoc({ ...editingDoc, title: file.name, content: text });
-    } catch (err: any) { setFileError(err.message); }
-    finally { setIsProcessingFile(false); }
+      showToast("Content extracted successfully");
+    } catch (err: any) { 
+      console.error("File processing error:", err);
+      setFileError(`Extraction Failed: ${err.message}`); 
+    } finally { 
+      setIsProcessingFile(false); 
+      setProcessingProgress(0);
+      setProcessingStatus('');
+    }
   };
 
   const filteredScenarios = scenarios.filter(s => 
@@ -151,7 +209,7 @@ const KnowledgeBase: React.FC = () => {
             <FileCode size={18} className="text-blue-600" />
             <span>Sync Assets</span>
           </button>
-          <button onClick={() => { setEditingScenario({ format: FormatType.STAR, tags: [] }); setIsModalOpen(true); }} className="flex items-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-100 transition-all active:scale-95">
+          <button onClick={() => { setEditingScenario({ title: '', format: FormatType.STAR, situation: '', task: '', action: '', result: '', tags: [] }); setIsModalOpen(true); }} className="flex items-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-100 transition-all active:scale-95">
             <Plus size={18} />
             <span>New Narrative</span>
           </button>
@@ -262,9 +320,24 @@ const KnowledgeBase: React.FC = () => {
                 <div className="flex flex-col items-center justify-center border-4 border-dashed border-slate-100 rounded-[3rem] p-16 bg-slate-50/30 hover:border-blue-100 transition-all group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                   <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf,.docx" className="hidden" />
                   {isProcessingFile ? (
-                    <div className="flex flex-col items-center space-y-4">
-                      <RefreshCw size={48} className="text-blue-600 animate-spin" />
-                      <p className="font-black text-slate-900 uppercase tracking-widest text-xs">Extracting Intelligence...</p>
+                    <div className="flex flex-col items-center space-y-6 w-full px-8">
+                      <div className="relative flex items-center justify-center">
+                        <RefreshCw size={64} className="text-blue-600 animate-spin opacity-20" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <span className="text-lg font-black text-blue-600">{processingProgress}%</span>
+                        </div>
+                      </div>
+                      <div className="w-full space-y-2">
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-blue-600 h-full transition-all duration-300 ease-out"
+                            style={{ width: `${processingProgress}%` }}
+                          />
+                        </div>
+                        <p className="font-black text-slate-900 uppercase tracking-widest text-[10px] text-center animate-pulse">
+                          {processingStatus}
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     <div className="text-center space-y-4">
