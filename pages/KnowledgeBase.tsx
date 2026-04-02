@@ -24,7 +24,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.10.38/buil
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
-const KnowledgeBase: React.FC = () => {
+interface KnowledgeBaseProps {
+  setActiveTab: (tab: string) => void;
+}
+
+const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ setActiveTab }) => {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [docs, setDocs] = useState<Document[]>([]);
   const [searchQuery, setSearchQuery] = useState('');

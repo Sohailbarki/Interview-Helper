@@ -11,7 +11,11 @@ import {
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
 
-const Dashboard: React.FC = () => {
+interface DashboardProps {
+  setActiveTab: (tab: string) => void;
+}
+
+const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
   const scenarios = databaseService.getScenarios();
   const sessions = databaseService.getSessions();
 
@@ -29,10 +33,6 @@ const Dashboard: React.FC = () => {
           <h1 className="text-4xl font-black text-slate-900 tracking-tight">Focus on the prize.</h1>
           <p className="text-slate-500 mt-2 font-medium">Your knowledge vault contains {scenarios.length} high-impact professional narratives.</p>
         </div>
-        <button className="flex items-center space-x-3 bg-slate-900 hover:bg-black text-white px-8 py-4 rounded-[2rem] font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-slate-200 active:scale-95">
-          <PlusCircle size={18} />
-          <span>New Prep Card</span>
-        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -80,7 +80,12 @@ const Dashboard: React.FC = () => {
             ) : (
               <div className="bg-slate-50/50 border-2 border-dashed border-slate-200 p-16 rounded-[3rem] text-center">
                 <p className="text-slate-400 font-bold text-sm">No recorded sessions in current vault.</p>
-                <button className="mt-4 text-blue-600 text-xs font-black uppercase tracking-widest hover:underline">Link Hardware Now</button>
+                <button 
+                  onClick={() => setActiveTab('session')}
+                  className="mt-4 text-blue-600 text-xs font-black uppercase tracking-widest hover:underline"
+                >
+                  Link Hardware Now
+                </button>
               </div>
             )}
           </div>

@@ -31,11 +31,11 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard setActiveTab={setActiveTab} />;
       case 'pkb':
-        return <KnowledgeBase />;
+        return <KnowledgeBase setActiveTab={setActiveTab} />;
       case 'session':
-        return <InterviewSession settings={settings} />;
+        return <InterviewSession settings={settings} setSettings={setSettings} />;
       case 'settings':
         return <Settings settings={settings} setSettings={setSettings} />;
       default:

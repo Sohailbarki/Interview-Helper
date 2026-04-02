@@ -41,6 +41,9 @@ export interface SuggestedAnswer {
   sources?: { title: string, uri: string }[];
 }
 
+export type AIMood = 'Professional' | 'Confident' | 'Humble' | 'Aggressive' | 'Conversational';
+export type ResponseStyle = 'Concise' | 'Detailed' | 'Storyteller' | 'Analytical';
+
 export interface AppSettings {
   aiProvider: 'gemini' | 'local' | 'openai';
   aiModel: string;
@@ -55,6 +58,8 @@ export interface AppSettings {
   footerHeight: number;
   overlayWidth: number;
   asrConfidenceThreshold: number;
+  aiMood: AIMood;
+  responseStyle: ResponseStyle;
 }
 
 declare global {

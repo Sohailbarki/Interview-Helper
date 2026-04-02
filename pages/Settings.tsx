@@ -16,7 +16,8 @@ import {
   Columns,
   Award,
   Terminal,
-  Users
+  Users,
+  Sparkles
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { databaseService } from '../services/databaseService';
@@ -133,6 +134,45 @@ const Settings: React.FC<SettingsProps> = ({ settings, setSettings }) => {
                   </button>
                 </div>
                 <p className="text-[10px] text-slate-400 font-medium italic">Found at platform.openai.com/api-keys. Only required for ChatGPT mode.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* AI PREPAREDNESS & TUNING */}
+        <div className="bg-white border border-slate-100 rounded-[3rem] overflow-hidden shadow-sm">
+          <div className="px-10 py-8 bg-slate-50 border-b border-slate-100 flex items-center space-x-4">
+            <Sparkles size={24} className="text-blue-600" />
+            <h3 className="font-black uppercase tracking-widest text-[11px] text-slate-900">AI Preparedness & Tuning</h3>
+          </div>
+          <div className="p-10 space-y-12">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+              <div className="space-y-4">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Interview Mood</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-[1.5rem] p-5 text-sm font-bold text-slate-900 focus:border-blue-400 outline-none"
+                  value={settings.aiMood}
+                  onChange={e => updateSetting('aiMood', e.target.value)}
+                >
+                  <option value="Professional">Professional (Balanced & Formal)</option>
+                  <option value="Confident">Confident (Authoritative & Bold)</option>
+                  <option value="Humble">Humble (Team-oriented & Modest)</option>
+                  <option value="Aggressive">Aggressive (Results-driven & Direct)</option>
+                  <option value="Conversational">Conversational (Friendly & Approachable)</option>
+                </select>
+              </div>
+              <div className="space-y-4">
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Response Style</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-100 rounded-[1.5rem] p-5 text-sm font-bold text-slate-900 focus:border-blue-400 outline-none"
+                  value={settings.responseStyle}
+                  onChange={e => updateSetting('responseStyle', e.target.value)}
+                >
+                  <option value="Concise">Concise (Short & Punchy)</option>
+                  <option value="Detailed">Detailed (Deep Technical Nuance)</option>
+                  <option value="Storyteller">Storyteller (High Emotional Stakes)</option>
+                  <option value="Analytical">Analytical (Data & Logic Focused)</option>
+                </select>
               </div>
             </div>
           </div>

@@ -15,15 +15,32 @@ interface Segment {
 }
 
 const cleanJsonResponse = (text: string) => {
+  if (!text) throw new Error("Empty response from AI.");
+  
+  // 1. Try direct parse
   try {
-    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
+    return JSON.parse(text);
   } catch (e) {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch (innerE) {}
+    // 2. Try cleaning markdown blocks
+    try {
+      const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(cleaned);
+    } catch (innerE) {
+      // 3. Try extracting the first valid JSON object using brace matching
+      const firstBrace = text.indexOf('{');
+      const lastBrace = text.lastIndexOf('}');
+      
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        const jsonCandidate = text.substring(firstBrace, lastBrace + 1);
+        try {
+          return JSON.parse(jsonCandidate);
+        } catch (deepE) {
+          console.error("Deep parse failed for text:", text);
+        }
+      }
+      
+      throw new Error("AI response was not valid JSON. Please try again.");
     }
-    throw new Error("Formatting error. Retrying...");
   }
 };
 
@@ -44,7 +61,7 @@ const callOpenAI = async (prompt: string, systemInstruction: string, settings: A
         { role: "system", content: systemInstruction },
         { role: "user", content: prompt }
       ],
-      temperature: 0.1,
+      temperature: 0.7,
       response_format: { type: "json_object" },
       max_tokens: 2000 
     })
@@ -59,37 +76,45 @@ const callOpenAI = async (prompt: string, systemInstruction: string, settings: A
   return JSON.parse(data.choices[0].message.content);
 };
 
-const callGemini = async (prompt: string, systemInstruction: string, schema?: any) => {
-  try {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      throw new Error("Gemini API Key missing. Please select a key using the 'Select Key' button.");
-    }
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0.1,
-        maxOutputTokens: 2000, 
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } 
-      },
-    });
+const callGemini = async (prompt: string, systemInstruction: string, schema?: any, temperature: number = 0.7, thinkingLevel: ThinkingLevel = ThinkingLevel.LOW, retries: number = 2, model: string = 'gemini-3.1-pro-preview', maxOutputTokens: number = 1000) => {
+  let lastError: any = null;
+  
+  for (let i = 0; i < retries; i++) {
+    try {
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        throw new Error("Gemini API Key missing. Please select a key using the 'Select Key' button.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: schema,
+          temperature,
+          maxOutputTokens, 
+          thinkingConfig: { thinkingLevel } 
+        },
+      });
 
-    const text = response.text;
-    if (!text) throw new Error("Empty response.");
-    
-    return cleanJsonResponse(text);
-  } catch (error) {
-    console.error("Gemini Failure:", error);
-    throw error;
+      const text = response.text;
+      if (!text) throw new Error("Empty response.");
+      
+      return cleanJsonResponse(text);
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`Gemini Attempt ${i + 1} failed:`, error.message);
+      // Wait a bit before retrying
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 500));
+    }
   }
+  
+  throw lastError || new Error("Gemini failed after multiple attempts.");
 };
 
-const NARRATIVE_SCHEMA = {
+const HOOK_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     detectedQuestion: { type: Type.STRING },
@@ -99,13 +124,20 @@ const NARRATIVE_SCHEMA = {
     confidence: { type: Type.NUMBER },
     formatType: { type: Type.STRING },
     hook: { type: Type.STRING },
-    answer: { type: Type.STRING },
-    bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
-    strategy: { type: Type.STRING },
     interviewerIntent: { type: Type.STRING },
     scenarioTitle: { type: Type.STRING, description: "The title of the scenario used or articulated." }
   },
-  required: ["detectedQuestion", "questionType", "isInterviewerQuestion", "detectedRole", "confidence", "formatType", "hook", "answer", "bullets", "strategy", "interviewerIntent", "scenarioTitle"]
+  required: ["detectedQuestion", "questionType", "isInterviewerQuestion", "detectedRole", "confidence", "formatType", "hook", "interviewerIntent", "scenarioTitle"]
+};
+
+const ANSWER_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    answer: { type: Type.STRING },
+    bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
+    strategy: { type: Type.STRING }
+  },
+  required: ["answer", "bullets", "strategy"]
 };
 
 export const aiService = {
@@ -120,7 +152,6 @@ export const aiService = {
         config: { 
           systemInstruction: VOICE_PROFILER_PROMPT, 
           maxOutputTokens: 200,
-          thinkingConfig: { thinkingBudget: 0 } 
         }
       });
       return response.text || "Professional.";
@@ -139,94 +170,92 @@ export const aiService = {
     voiceHabits: string = "",
     settings: AppSettings,
     roleHint?: 'INTERVIEWER' | 'CANDIDATE' | null,
-    usedScenarioTitles: string[] = []
+    usedScenarioTitles: string[] = [],
+    onPartialUpdate?: (partial: any) => void,
+    previousAnswer?: any,
+    isFollowUpHint?: boolean
   ): Promise<any> {
     const docs = databaseService.getDocuments();
-    const cvDocs = docs.filter(d => d.type === 'CV' || d.type === 'Notes').map(d => `[${d.title}]\n${d.content}`).join('\n\n').slice(0, 30000);
-    const jdDocs = docs.filter(d => d.type === 'JD').map(d => `[${d.title}]\n${d.content}`).join('\n\n').slice(0, 10000);
+    const cvDocs = docs.filter(d => d.type === 'CV' || d.type === 'Notes').map(d => `[${d.title}]\n${d.content}`).join('\n\n').slice(0, 25000);
+    const jdDocs = docs.filter(d => d.type === 'JD').map(d => `[${d.title}]\n${d.content}`).join('\n\n').slice(0, 8000);
 
     const chatHistory = history
-      .slice(-5)
+      .slice(-15)
       .map(s => `${s.role}: ${s.text}`)
       .join('\n');
 
-    // Switch System Backend Prompt based on the requested output logic
     const activeSystemPrompt = preferredFormat === FormatType.LOGICAL 
       ? STRATEGIC_LOGICAL_PROMPT 
       : NARRATIVE_SYSTEM_PROMPT;
 
-    const prompt = `
-### MANDATORY COMMAND: 
-Synthesize an ELITE, HUMANIZED answer using the ${preferredFormat} track. 
-${roleHint ? `### ROLE LOCK ACTIVE: The current speaker is DEFINITELY the ${roleHint}. You MUST set "detectedRole" to "${roleHint}" in your JSON response. Do not attempt to detect the role yourself.` : ''}
+    const basePrompt = `
+### TARGET ROLE:
+- **POSITION**: ${role} at **${company}**. 
+- **LENS**: Filter all experiences through the lens of a **${role}**. Use appropriate vocabulary and technical depth.
+- **UPSCALE**: If using a past role's scenario, upscale it to the level of a **${role}**.
 
-### SCENARIO SELECTION & NO-REPEAT PROTOCOL:
-1. **PRIORITY**: You MUST prioritize using STAR/CAR scenarios from the Success Vault that have NOT yet been used in this session.
-2. **USED SCENARIOS**: The following scenarios have already been used:
-${usedScenarioTitles.length > 0 ? usedScenarioTitles.map(t => `- ${t}`).join('\n') : 'None used yet.'}
-3. **REUSE POLICY**: If and ONLY IF no unused scenarios are suitable for the question, you may reuse a previously used scenario. However, if you reuse a scenario, you MUST find a completely NEW angle, focus on a different sub-project, or inject different technical details from the CV to keep the answer fresh.
-4. **SAME QUESTION**: If the same question is asked twice, you MUST NOT provide the exact same answer. Pivot to a different project or a different success token from the CV.
+### CONCISENESS & IMPACT:
+- **EFFICIENCY**: Be detailed but avoid filler. Every sentence must provide strategic value.
+- **LENGTH**: Aim for 400-500 words for deep situational grounding.
 
-### CREATIVE SYNTHESIS & ARTICULATION PROTOCOL:
-- **Beyond the Vault**: If no direct match exists in the Success Vault (Scenarios), or if all suitable scenarios are exhausted, you are MANDATED to "articulate" a new STAR/CAR story by mining the Candidate CV for relevant projects and technical achievements.
-- **Linkage**: Explicitly link the articulated scenario to the candidate's real-world experience found in the CV.
-- **Novelty**: Always aim for novelty. Use the massive detail in the CV to upscale the narrative context.
+### FOLLOW-UP DETECTION:
+- **STAY**: If input is a direct follow-up to the *same* scenario, provide deeper granularity.
+- **MOVE**: If input is a NEW question or request for a different example, move to an UNUSED scenario.
+${isFollowUpHint ? `- **HINT**: System suspects a follow-up; verify if it's the same story or a new question.` : ''}
 
-### THINKING PROTOCOL:
-Before providing the JSON response, you MUST:
-1. Identify the core competency being tested.
-2. Scan the Success Vault for the most relevant UNUSED scenario.
-3. If no suitable UNUSED scenario exists, scan for a suitable USED scenario (and plan a new angle) OR mine the CV for a fresh project to articulate.
-4. Scan the CV for supporting technical and metric details to upscale the chosen story.
-5. Plan how to reiterate the question and build a foundational base.
+### AI TUNING:
+- **MOOD**: ${settings.aiMood}.
+- **STYLE**: ${settings.responseStyle}.
 
-### DEEP SCAN & STRATEGIC MATCHING PROTOCOL:
-You MUST perform a meticulous, word-by-word analysis of the provided CV, JD, and Scenarios. 
-- **Project Cataloging**: Before synthesizing, mentally list every project and achievement found in the CV and Scenarios.
-- **Identify & Prioritize**: Find the specific projects, activities, and technical achievements that most closely align with the Job Description (JD).
-- **Adapt & Bridge**: If a direct match for a JD requirement isn't found in the Scenarios, select the most relevant experience from the CV and "bridge" it. Reframe the narrative to show how those transferable skills solve the specific problems outlined in the JD.
-- **Interviewer Intent**: Decode the underlying competency the interviewer is testing. Explicitly state this in the "interviewerIntent" field.
-- **Question Type Recognition**: Categorize the question as TECHNICAL, BEHAVIORAL, CLARIFICATION, or FOLLOW_UP. Adapt your response structure accordingly as per the system instructions.
-- **Industry Standards + User Experience**: For LOGICAL answers, synthesize industry-standard practices with the candidate's specific real-world experiences.
-- **Humanized Situation**: The [S] Situation must be highly specific to the project and environment found in the CV, avoiding generic cliches.
-- **No Placeholders**: Use the specific metrics, tech stacks, and team dynamics found in the candidate's history.
+### SCENARIO PROTOCOL:
+1. **PRIORITY**: Use UNUSED scenarios from the Success Vault first.
+2. **USED**: ${usedScenarioTitles.join(', ') || 'None'}.
+3. **NO REPEAT**: Do not reuse scenarios unless exhausted.
+4. **ARTICULATE**: If vault is empty/unsuitable, mine the CV to build a new STAR/CAR/Logical story.
 
-### CONTEXT FOR REAL-TIME ADAPTATION:
-- Conversation Flow:
-${chatHistory}
-- Latest Input (Live): "${currentTranscript}"
-- Target Position: ${role} at ${company}
-- Success Vault (Scenarios): ${JSON.stringify(scenarios.filter(s => s.title))}
+### CONTEXT:
+- Conversation: ${chatHistory}
+- Latest Input: "${currentTranscript}"
+${previousAnswer ? `- Previous Suggestion: "${previousAnswer.answer}"` : ''}
+- Success Vault: ${JSON.stringify(scenarios.filter(s => s.title))}
 - Candidate CV: ${cvDocs}
 - JD/Notes: ${jdDocs}
-
-### LOGICAL MODE SPECIFIC INSTRUCTIONS:
-${preferredFormat === FormatType.LOGICAL ? `
-- ROLE & SENIORITY: Extract the candidate's exact role and seniority from the CV. Use language that reflects that level of responsibility.
-- HUMANIZATION: Use natural transitions (e.g., "The way I see it...", "In my previous environments, I've found that...") instead of robotic bullet points.
-- HOOK: Create an effective, provocative opening that immediately establishes authority.
-- DO NOT use STAR or CAR markers.
-- DO NOT provide specific stories or anecdotes.
-- PROVIDE a general professional framework grounded in the CV's technical/functional domain.
-` : `
-- PROVIDE a vivid, detailed STAR/CAR story.
-- Use the Candidate CV to upscale the narrative context with massive detail.
-`}
-
-### RELEVANCE AUDIT:
-1. Identify if this is a follow-up or a new question.
-2. If [LOGICAL] mode: Provide a framework covering Behavioral Logic, Technical Implementation, and Wisdom. Root framework points in professional philosophy.
-3. If [NARRATIVE] mode: Paint a massive, vivid STAR story using CV data.
-4. Strictly align domain keywords to the matching CV/Vault entries.
 `;
 
-    let result;
-    if (settings.aiProvider === 'openai') {
-      result = await callOpenAI(prompt, activeSystemPrompt, settings);
-    } else {
-      result = await callGemini(prompt, activeSystemPrompt, NARRATIVE_SCHEMA);
+    // STAGE 1: GENERATE HOOK
+    const hookPrompt = `
+${basePrompt}
+
+### STAGE 1: HOOK GENERATION
+1. **DECODE INTENT**: Identify the interviewer's hidden agenda.
+2. **SELECT SCENARIO**: Find the best UNUSED scenario (or articulate from CV).
+3. **GENERATE HOOK**: Create a detailed 6-8 sentence opening establishing authority and complexity.
+4. **OUTPUT**: Return JSON matching HOOK_SCHEMA.
+`;
+
+    const hookResult = await callGemini(hookPrompt, activeSystemPrompt, HOOK_SCHEMA, 0.7, ThinkingLevel.LOW, 2, 'gemini-3-flash-preview', 600);
+    
+    if (onPartialUpdate) {
+      onPartialUpdate({ ...hookResult, answer: "Generating full response...", bullets: [] });
     }
 
-    return result;
+    // STAGE 2: GENERATE FULL ANSWER
+    const answerPrompt = `
+${basePrompt}
+
+### STAGE 2: FULL SYNTHESIS
+Hook generated: "${hookResult.hook}"
+
+1. **UPSCALE**: Flesh out the scenario with technical detail from the CV.
+2. **STRUCTURE**: Generate full STAR/CAR or Logical response.
+3. **DETAIL**: Provide high-stakes context in [S] and [T].
+4. **OUTPUT**: Return JSON matching ANSWER_SCHEMA.
+`;
+
+    // Using Pro with LOW thinking level for Stage 2 to balance speed and quality
+    const answerResult = await callGemini(answerPrompt, activeSystemPrompt, ANSWER_SCHEMA, 0.7, ThinkingLevel.LOW, 2, 'gemini-3.1-pro-preview', 1800);
+    
+    const finalResult = { ...hookResult, ...answerResult };
+    return finalResult;
   }
 };

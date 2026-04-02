@@ -50,7 +50,7 @@ interface Segment {
   timestamp: number;
 }
 
-const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => {
+const InterviewSession: React.FC<{ settings: AppSettings, setSettings: (s: AppSettings) => void }> = ({ settings, setSettings }) => {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -58,6 +58,8 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
   const [suggestedAnswer, setSuggestedAnswer] = useState<any | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [isRecordingVoiceProfile, setIsRecordingVoiceProfile] = useState(false);
+  const [voiceProfileProgress, setVoiceProfileProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [displayFontSize, setDisplayFontSize] = useState(settings.fontSize || 56);
   const [preferredFormat, setPreferredFormat] = useState<FormatType>(FormatType.STAR);
@@ -77,6 +79,7 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
   const lastTriggerTimeRef = useRef<number>(0);
   const interimTimeoutRef = useRef<number | null>(null);
   const segmentsRef = useRef<Segment[]>([]);
+  const suggestedAnswerRef = useRef<any>(null);
 
   const preferredFormatRef = useRef<FormatType>(preferredFormat);
   const companyNameRef = useRef<string>(companyName);
@@ -101,18 +104,45 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [segments, interimTranscript]);
 
+  const detectFollowUp = (text: string, previousAnswer: string | null) => {
+    if (!previousAnswer) return false;
+    const query = text.toLowerCase();
+    
+    // 1. Direct follow-up phrases (must be very specific)
+    const directFollowUpPhrases = [
+      "can you elaborate on that", "tell me more about that", "why did you do that", 
+      "how did you do that", "explain that further", "why that approach", 
+      "how so", "what was the result of that", "how did that impact"
+    ];
+    if (directFollowUpPhrases.some(p => query.includes(p))) return true;
+
+    // 2. Pronoun references (only for very short queries)
+    const pronouns = [" that", " this", " it ", " those", " these"];
+    if (pronouns.some(p => query.includes(p)) && query.length < 40) return true;
+
+    // 3. Very short questions after an answer (likely follow-up)
+    if (query.length < 25 && query.includes('?')) return true;
+
+    return false;
+  };
+
   const triggerCopilot = useCallback(async (text: string, forceRole?: 'INTERVIEWER' | 'CANDIDATE', bypassDebounce: boolean = false) => {
     const queryText = text.trim();
-    if (queryText.length < 15) return;
+    const hasQuestionMark = queryText.includes('?');
+    if (queryText.length < (hasQuestionMark ? 8 : 15)) return;
 
     const now = Date.now();
     
-    // CRITICAL: If Candidate Lock is active, block all automatic synthesis to prevent overwriting the current help
-    if (manualLockRef.current === 'CANDIDATE' && !forceRole && !bypassDebounce) return;
-
     // Intelligent debounce: allow faster triggers if question markers are detected
-    const isLikelyQuestion = queryText.includes('?') || /^(why|how|what|can you|tell me|explain)/i.test(queryText);
-    const debounceLimit = isLikelyQuestion ? 1500 : 4000;
+    const isLikelyQuestion = hasQuestionMark || /^(why|how|what|can you|tell me|explain)/i.test(queryText);
+
+    // CRITICAL: If Candidate Lock is active, block all automatic synthesis to prevent overwriting the current help
+    // This ensures that when the user is talking, the answers don't change
+    // EXCEPT if a new question is detected (likely from the interviewer), we should trigger synthesis
+    if (manualLockRef.current === 'CANDIDATE' && !forceRole && !bypassDebounce && !isLikelyQuestion) return;
+
+    const isFollowUp = detectFollowUp(queryText, suggestedAnswerRef.current?.answer);
+    const debounceLimit = hasQuestionMark ? 800 : (isLikelyQuestion ? 1500 : 4000);
     
     if (!bypassDebounce && now - lastTriggerTimeRef.current < debounceLimit && !forceRole) return;
     
@@ -129,8 +159,20 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
         preferredFormatRef.current,
         voiceProfile,
         settings, 
-        forceRole || manualLockRef.current,
-        usedScenarioTitles
+        forceRole || (isLikelyQuestion ? null : manualLockRef.current),
+        usedScenarioTitles,
+        (partial) => {
+          setSuggestedAnswer(partial);
+          suggestedAnswerRef.current = partial;
+          if (partial.scenarioTitle) {
+            setUsedScenarioTitles(prev => {
+              if (prev.includes(partial.scenarioTitle)) return prev;
+              return [...prev, partial.scenarioTitle];
+            });
+          }
+        },
+        suggestedAnswerRef.current,
+        isFollowUp
       );
       
       if (result) {
@@ -154,13 +196,12 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
         }
         
         // If Candidate Lock is active, we NEVER update the suggested answer unless it's a forced re-render (like format change)
-        if (manualLockRef.current === 'CANDIDATE' && !bypassDebounce) return;
+        // OR if it's a likely question (interviewer speaking)
+        if (manualLockRef.current === 'CANDIDATE' && !bypassDebounce && !isLikelyQuestion) return;
 
         if (result.isInterviewerQuestion || finalRole === 'INTERVIEWER' || bypassDebounce) {
           setSuggestedAnswer(result);
-          if (result.scenarioTitle && !usedScenarioTitles.includes(result.scenarioTitle)) {
-            setUsedScenarioTitles(prev => [...prev, result.scenarioTitle]);
-          }
+          suggestedAnswerRef.current = result;
         }
       }
     } catch (err: any) {
@@ -168,7 +209,7 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
     } finally {
       setIsAnalyzing(false);
     }
-  }, [voiceProfile, settings]);
+  }, [voiceProfile, settings, usedScenarioTitles, setSuggestedAnswer, setUsedScenarioTitles, setSegments]);
 
   useEffect(() => {
     const combined = (transcript + ' ' + interimTranscript).trim();
@@ -254,7 +295,8 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
             transcriptBufferRef.current += ' ' + text;
             
             const words = transcriptBufferRef.current.trim().split(/\s+/);
-            if (words.length >= 12) {
+            const hasFinalQuestion = transcriptBufferRef.current.includes('?');
+            if (words.length >= (hasFinalQuestion ? 6 : 12)) {
               triggerCopilot(transcriptBufferRef.current);
               transcriptBufferRef.current = '';
             }
@@ -265,31 +307,70 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
         setInterimTranscript(interim);
 
         // Responsive interim trigger for faster feedback
+        const hasInterimQuestion = interim.includes('?');
+        const interimTimeout = hasInterimQuestion ? 600 : 1200;
+        
         if (interim.split(/\s+/).length >= 15) {
           if (interimTimeoutRef.current) window.clearTimeout(interimTimeoutRef.current);
           interimTimeoutRef.current = window.setTimeout(() => {
-            if (interimTranscript) triggerCopilot(interimTranscript);
-          }, 1200);
+            if (interim) triggerCopilot(interim);
+          }, interimTimeout);
         }
       };
       
       recognition.onend = () => { 
         if (isListeningRef.current) {
-          try { recognition.start(); } catch (e) { cleanupAudio(); }
+          console.log("ASR Session ended unexpectedly, attempting auto-restart...");
+          // Small delay to prevent rapid-fire restart failures
+          setTimeout(() => {
+            if (isListeningRef.current) {
+              try { 
+                recognition.start(); 
+              } catch (e: any) { 
+                // If it's already started, we're good. Otherwise, try again in a bit.
+                if (e.name === 'InvalidStateError') {
+                  console.log("ASR already running, no restart needed.");
+                } else {
+                  console.warn("ASR Restart Failed, retrying in 1s...", e);
+                  setTimeout(() => {
+                    if (isListeningRef.current) {
+                      try { recognition.start(); } catch (err) { console.error("ASR Final Restart Attempt Failed", err); }
+                    }
+                  }, 1000);
+                }
+              }
+            }
+          }, 300);
         }
       };
 
       recognition.onerror = (e: any) => { 
-        if (e.error !== 'no-speech' && e.error !== 'aborted') {
-          setError(`ASR Link Error: ${e.error}`);
+        // Ignore common non-fatal errors
+        if (e.error === 'no-speech' || e.error === 'aborted') return;
+        
+        console.warn(`ASR Error Detected: ${e.error}`);
+        
+        // Only terminate session for fatal errors
+        if (e.error === 'not-allowed' || e.error === 'audio-capture') {
+          let msg = `ASR Fatal Error: ${e.error}`;
+          if (e.error === 'not-allowed') msg = "Microphone Access Denied. Please enable permissions.";
+          if (e.error === 'audio-capture') msg = "No Microphone Detected.";
+          setError(msg);
           cleanupAudio(); 
+        } else if (e.error === 'network') {
+          // Network errors are often transient, let onend try to recover
+          console.log("Network hiccup, waiting for onend to restart...");
         }
       };
 
       recognition.start();
       recognitionRef.current = recognition;
     } catch (e: any) {
-      setError(`Hardware Fail: ${e.message}`);
+      let msg = `Hardware Fail: ${e.message}`;
+      if (e.name === 'NotAllowedError') msg = "Microphone Access Denied. Please enable permissions in your browser.";
+      if (e.name === 'NotFoundError') msg = "No Microphone Detected. Please connect a recording device.";
+      if (e.name === 'NotReadableError') msg = "Microphone Busy. Another application is using your recording device.";
+      setError(msg);
       setIsInitializing(false);
       cleanupAudio();
     }
@@ -302,12 +383,72 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
     
     const combined = (transcript + ' ' + interimTranscript).trim();
     if (newLock && combined.length > 5) {
+      // If we lock to candidate, we don't want to trigger a new suggestion based on their speech
+      if (newLock === 'CANDIDATE') return;
+      
       triggerCopilot(combined, newLock, true);
       if (newLock === 'INTERVIEWER') {
         setTranscript(''); 
         setInterimTranscript(''); 
         transcriptBufferRef.current = '';
       }
+    }
+  };
+
+  const handleRecordVoiceProfile = async () => {
+    if (isRecordingVoiceProfile) return;
+    
+    try {
+      setIsRecordingVoiceProfile(true);
+      setVoiceProfileProgress(0);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      const recognition = new SpeechRec();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      
+      let sampleText = "";
+      
+      recognition.onresult = (event: any) => {
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            sampleText += " " + event.results[i][0].transcript;
+          }
+        }
+      };
+      
+      recognition.start();
+      
+      const duration = 10000; // 10 seconds
+      const interval = 100;
+      let elapsed = 0;
+      
+      const timer = setInterval(() => {
+        elapsed += interval;
+        setVoiceProfileProgress(Math.min(100, (elapsed / duration) * 100));
+        if (elapsed >= duration) {
+          clearInterval(timer);
+          recognition.stop();
+          stream.getTracks().forEach(t => t.stop());
+          
+          if (sampleText.trim().length > 20) {
+            aiService.generateVoiceProfile(sampleText).then(profile => {
+              setVoiceProfile(profile);
+              localStorage.setItem('user_voice_habits', profile);
+              setIsRecordingVoiceProfile(false);
+            });
+          } else {
+            setError("Sample too short. Please speak clearly for 10 seconds.");
+            setIsRecordingVoiceProfile(false);
+          }
+        }
+      }, interval);
+      
+    } catch (e: any) {
+      setError(`Voice Profiling Failed: ${e.message}`);
+      setIsRecordingVoiceProfile(false);
     }
   };
 
@@ -373,6 +514,62 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
                 Logic
               </button>
             </div>
+
+            <div className="h-10 w-px bg-slate-100"></div>
+
+            <div className="flex flex-col space-y-1">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                <Sparkles size={10} /> Tuning
+              </span>
+              <div className="flex items-center space-x-2">
+                <select 
+                  value={settings.aiMood} 
+                  onChange={e => setSettings({...settings, aiMood: e.target.value})}
+                  className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1 text-[9px] font-black uppercase tracking-widest text-slate-600 outline-none hover:border-blue-300 transition-all"
+                >
+                  <option value="Professional">Professional</option>
+                  <option value="Confident">Confident</option>
+                  <option value="Humble">Humble</option>
+                  <option value="Aggressive">Aggressive</option>
+                  <option value="Conversational">Conversational</option>
+                </select>
+                <select 
+                  value={settings.responseStyle} 
+                  onChange={e => setSettings({...settings, responseStyle: e.target.value})}
+                  className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1 text-[9px] font-black uppercase tracking-widest text-slate-600 outline-none hover:border-blue-300 transition-all"
+                >
+                  <option value="Concise">Concise</option>
+                  <option value="Detailed">Detailed</option>
+                  <option value="Storyteller">Storyteller</option>
+                  <option value="Analytical">Analytical</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="h-10 w-px bg-slate-100"></div>
+
+            <div className="flex flex-col space-y-1">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                <Fingerprint size={10} /> Voice Profile
+              </span>
+              <button 
+                onClick={handleRecordVoiceProfile}
+                disabled={isRecordingVoiceProfile}
+                className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border flex items-center gap-2 ${isRecordingVoiceProfile ? 'bg-blue-50 border-blue-200 text-blue-600' : (voiceProfile ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-white border-slate-100 text-slate-400 hover:bg-slate-50')}`}
+              >
+                {isRecordingVoiceProfile ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
+                    <span>{voiceProfileProgress.toFixed(0)}%</span>
+                  </div>
+                ) : (
+                  <>
+                    <Activity size={12} />
+                    <span>{voiceProfile ? 'Profile Active' : 'Record Sample'}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
           
           <div className="h-10 w-px bg-slate-100"></div>
@@ -382,7 +579,19 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
             <div className="flex items-center space-x-2 px-3 py-1.5 bg-slate-900 rounded-xl">
                 <Cpu size={14} className="text-blue-400" />
                 <span className="text-[10px] font-black text-white uppercase tracking-widest">
-                    Gemini 3 Flash
+                    Gemini 3.1 Pro
+                </span>
+            </div>
+          </div>
+          
+          <div className="h-10 w-px bg-slate-100"></div>
+
+          <div className="flex flex-col space-y-1">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Neural Autonomy</span>
+            <div className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-900/20 border border-emerald-500/30 rounded-xl">
+                <Sparkles size={12} className="text-emerald-400 animate-pulse" />
+                <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">
+                    Active
                 </span>
             </div>
           </div>
@@ -412,8 +621,8 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
                  <div className="p-8 bg-slate-100 rounded-full animate-pulse">
                     <Mic size={80} className="text-slate-300" />
                  </div>
-                 <p className="text-xl font-black uppercase tracking-[0.2em] text-slate-900">Listening Hardware Offline</p>
-                 <p className="text-[10px] text-slate-400 font-bold max-w-xs uppercase leading-relaxed text-center">Press Initiate to start real-time context decoding.</p>
+                  <p className="text-xl font-black uppercase tracking-[0.2em] text-slate-900">Listening Hardware Offline</p>
+                  <p className="text-[10px] text-slate-400 font-bold max-w-xs uppercase leading-relaxed text-center">Ensure your microphone is connected and permissions are granted before initiating the session.</p>
               </div>
             )}
             {segments.map((seg, i) => (
@@ -465,9 +674,15 @@ const InterviewSession: React.FC<{ settings: AppSettings }> = ({ settings }) => 
                 Live Logic Processor
               </h3>
             </div>
-            <div className={`flex items-center space-x-3 ${isAnalyzing ? 'text-blue-600 font-bold' : 'text-slate-300'}`}>
-              {isAnalyzing && <RefreshCw size={14} className="animate-spin" />}
-              <span className="text-[8px] font-black uppercase tracking-widest">{isAnalyzing ? 'Synthesizing...' : 'Awaiting Data'}</span>
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                <span className="text-[7px] font-black text-emerald-600 uppercase tracking-widest">Neural Autonomy Active</span>
+              </div>
+              <div className={`flex items-center space-x-3 ${isAnalyzing ? 'text-blue-600 font-bold' : 'text-slate-300'}`}>
+                {isAnalyzing && <RefreshCw size={14} className="animate-spin" />}
+                <span className="text-[8px] font-black uppercase tracking-widest">{isAnalyzing ? 'Synthesizing...' : 'Awaiting Data'}</span>
+              </div>
             </div>
           </div>
           
